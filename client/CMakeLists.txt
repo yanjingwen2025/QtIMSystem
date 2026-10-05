@@ -13,6 +13,16 @@ qt_add_executable(QtIMClient
 
     include/network/tcpclient.h
     src/network/tcpclient.cpp
+    include/network/filetransfersession.h
+    src/network/filetransfersession.cpp
+    include/network/filesender.h
+    src/network/filesender.cpp
+    include/network/filereceiver.h
+    src/network/filereceiver.cpp
+    include/network/filetransfermanager.h
+    src/network/filetransfermanager.cpp
+    include/network/filereaderworker.h
+    src/network/filereaderworker.cpp
 )
 
 target_include_directories(QtIMClient PRIVATE

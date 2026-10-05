@@ -6,6 +6,7 @@ add_library(im_common STATIC
     include/common/packetcodec.h
     src/packetcodec.cpp
     include/common/messagestatus.h
+    include/common/filemeta.h
 )
 
 target_include_directories(im_common PUBLIC

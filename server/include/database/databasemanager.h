@@ -55,6 +55,15 @@ public:
                        const QString &content,
                        MessageStatus status);
 
+    bool markMessageDelivered(qint64 messageId);
+
+    bool getMessageInfo(qint64 messageId,
+                        qint64 &senderId,
+                        qint64 &receiverId,
+                        QString &content);
+
+    QString getUsernameById(qint64 userId);
+
     QList<OfflineMessage> takeOfflineMessages(qint64 receiverId);
 
 private:

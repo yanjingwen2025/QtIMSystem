@@ -426,10 +426,12 @@ QList<OfflineMessage> DatabaseManager::takeOfflineMessages(
 
         update.prepare(
             "UPDATE messages "
-            "SET status = 1 "
+            "SET status = :deliveredStatus "
             "WHERE id = :id"
             );
 
+        update.bindValue(":deliveredStatus",
+                         static_cast<qint32>(MessageStatus::Delivered));
         update.bindValue(":id", id);
 
         if (!update.exec()) {
@@ -448,4 +450,90 @@ QList<OfflineMessage> DatabaseManager::takeOfflineMessages(
     }
 
     return result;
+}
+
+
+bool DatabaseManager::markMessageDelivered(qint64 messageId)
+{
+    QSqlQuery query(m_database);
+
+    query.prepare(
+        "UPDATE messages "
+        "SET status = :status "
+        "WHERE id = :id"
+        );
+
+    query.bindValue(":status",
+                    static_cast<qint32>(MessageStatus::Delivered));
+    query.bindValue(":id", messageId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to mark message delivered:"
+                   << query.lastError().text();
+        return false;
+    }
+
+    if (query.numRowsAffected() <= 0) {
+        qWarning() << "No message updated for id =" << messageId;
+        return false;
+    }
+
+    return true;
+}
+
+bool DatabaseManager::getMessageInfo(
+    qint64 messageId,
+    qint64 &senderId,
+    qint64 &receiverId,
+    QString &content)
+{
+    QSqlQuery query(m_database);
+
+    query.prepare(
+        "SELECT sender_id, receiver_id, content "
+        "FROM messages "
+        "WHERE id = :id"
+        );
+
+    query.bindValue(":id", messageId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to query message info:"
+                   << query.lastError().text();
+        return false;
+    }
+
+    if (!query.next()) {
+        return false;
+    }
+
+    senderId = query.value(0).toLongLong();
+    receiverId = query.value(1).toLongLong();
+    content = query.value(2).toString();
+
+    return true;
+}
+
+QString DatabaseManager::getUsernameById(qint64 userId)
+{
+    QSqlQuery query(m_database);
+
+    query.prepare(
+        "SELECT username FROM users "
+        "WHERE id = :id"
+        );
+
+    query.bindValue(":id", userId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to query username:"
+                   << query.lastError().text();
+        return {};
+    }
+
+    if (!query.next()) {
+        return {};
+    }
+
+    return query.value(0).toString();
 }

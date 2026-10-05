@@ -51,6 +51,27 @@ private:
 
     void handleHeartbeat(ClientSession *session,
                          const Packet &packet);
+
+    void handleDeliveredAck(ClientSession *session,
+                            const Packet &packet);
+
+    void handleFileRequest(ClientSession *session,
+                           const Packet &packet);
+
+    void handleFileAccept(ClientSession *session,
+                          const Packet &packet);
+
+    void handleFileReject(ClientSession *session,
+                          const Packet &packet);
+
+    void handleFileChunk(ClientSession *session,
+                         const Packet &packet);
+
+    void handleFileComplete(ClientSession *session,
+                            const Packet &packet);
+
+    void handleFileCompleteAck(ClientSession *session,
+                               const Packet &packet);
 };
 
 #endif // TCPSERVER_H

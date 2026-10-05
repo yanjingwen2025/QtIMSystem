@@ -164,6 +164,34 @@ void TcpServer::onPacketReceived(ClientSession *session,
         handleHeartbeat(session, packet);
         break;
 
+    case MessageType::PrivateMessageDelivered:
+        handleDeliveredAck(session, packet);
+        break;
+
+    case MessageType::FileRequest:
+        handleFileRequest(session, packet);
+        break;
+
+    case MessageType::FileAccept:
+        handleFileAccept(session, packet);
+        break;
+
+    case MessageType::FileReject:
+        handleFileReject(session, packet);
+        break;
+
+    case MessageType::FileChunk:
+        handleFileChunk(session, packet);
+        break;
+
+    case MessageType::FileComplete:
+        handleFileComplete(session, packet);
+        break;
+
+    case MessageType::FileCompleteAck:
+        handleFileCompleteAck(session, packet);
+        break;
+
     default:
         qWarning() << "Unknown packet type:"
                    << static_cast<quint16>(packet.header.type);
@@ -424,9 +452,11 @@ void TcpServer::handlePrivateMessage(ClientSession *session,
     ClientSession *receiverSession =
         m_onlineSessions.value(to, nullptr);
 
-    MessageStatus status = (receiverSession != nullptr)
-                               ? MessageStatus::Delivered
-                               : MessageStatus::Pending;
+    //MessageStatus status = (receiverSession != nullptr)
+    //                           ? MessageStatus::Delivered
+    //                           : MessageStatus::Pending;
+
+    MessageStatus status = MessageStatus::Pending;
 
     qint64 messageId = m_database->saveMessage(
         senderId, receiverId, content, status);
@@ -496,3 +526,321 @@ void TcpServer::handleHeartbeat(ClientSession *session,
 
     session->socket()->write(ackPacket);
 }
+
+void TcpServer::handleDeliveredAck(ClientSession *session,
+                                   const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        qWarning() << "Unauthenticated client sent delivered ack";
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    qint64 messageId = json["messageId"].toVariant().toLongLong();
+
+    if (messageId <= 0) {
+        qWarning() << "Invalid delivered ack messageId";
+        return;
+    }
+
+    bool ok = m_database->markMessageDelivered(messageId);
+
+    if (!ok) {
+        qWarning() << "Failed to mark delivered:"
+                   << "messageId =" << messageId;
+        return;
+    }
+
+    qInfo() << "Message delivered:"
+            << "messageId =" << messageId
+            << "from =" << session->username();
+
+    // 1. 查出这条消息的 sender_id
+    qint64 senderId = -1;
+    qint64 receiverId = -1;
+    QString content;
+
+    if (!m_database->getMessageInfo(messageId,
+                                    senderId,
+                                    receiverId,
+                                    content)) {
+        qWarning() << "Cannot load message info for"
+                   << messageId;
+        return;
+    }
+
+    // 2. 查出 sender 的 username
+    QString senderName = m_database->getUsernameById(senderId);
+
+    if (senderName.isEmpty()) {
+        qWarning() << "Cannot resolve sender name for id"
+                   << senderId;
+        return;
+    }
+
+    // 3. 如果 sender 在线，通知他"对方已送达"
+    ClientSession *senderSession =
+        m_onlineSessions.value(senderName, nullptr);
+
+    if (senderSession == nullptr) {
+        // 发送方已经离线，他下次登录时
+        // 也不会再需要这个通知（消息已经 Delivered 了）
+        return;
+    }
+
+    QJsonObject notifyJson;
+    notifyJson["messageId"] = messageId;
+
+    QByteArray notifyBody =
+        QJsonDocument(notifyJson).toJson(QJsonDocument::Compact);
+
+    QByteArray notifyPacket =
+        PacketCodec::encode(
+            MessageType::PrivateMessageDelivered,
+            notifyBody
+            );
+
+    senderSession->socket()->write(notifyPacket);
+
+    qInfo() << "Delivered notified to sender:"
+            << senderName
+            << "messageId =" << messageId;
+
+}
+
+void TcpServer::handleFileRequest(ClientSession *session,
+                                  const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        qWarning() << "Unauthenticated file request";
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    QString to = json["to"].toString();
+
+    ClientSession *receiverSession =
+        m_onlineSessions.value(to, nullptr);
+
+    if (receiverSession == nullptr) {
+        qInfo() << "File request target offline:" << to;
+        return;
+    }
+
+    QJsonObject forwardJson;
+    forwardJson["from"]     = session->username();
+    forwardJson["fileId"]   = json["fileId"];
+    forwardJson["fileName"] = json["fileName"];
+    forwardJson["fileSize"] = json["fileSize"];
+    forwardJson["fileMd5"]  = json["fileMd5"];
+
+    QByteArray forwardBody =
+        QJsonDocument(forwardJson).toJson(QJsonDocument::Compact);
+
+    QByteArray forwardPacket =
+        PacketCodec::encode(MessageType::FileRequest, forwardBody);
+
+    receiverSession->socket()->write(forwardPacket);
+
+    qInfo() << "FileRequest forwarded:"
+            << session->username() << "->" << to
+            << "fileId =" << json["fileId"].toString();
+}
+
+void TcpServer::handleFileAccept(ClientSession *session,
+                                 const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        qWarning() << "Unauthenticated file accept";
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    QString to = json["to"].toString();
+    QString fileId = json["fileId"].toString();
+
+    ClientSession *targetSession =
+        m_onlineSessions.value(to, nullptr);
+
+    if (targetSession == nullptr) {
+        qInfo() << "FileAccept target offline:" << to;
+        return;
+    }
+
+    QJsonObject forwardJson;
+    forwardJson["from"]   = session->username();
+    forwardJson["fileId"] = fileId;
+
+    QByteArray forwardBody =
+        QJsonDocument(forwardJson).toJson(QJsonDocument::Compact);
+
+    QByteArray forwardPacket =
+        PacketCodec::encode(MessageType::FileAccept, forwardBody);
+
+    targetSession->socket()->write(forwardPacket);
+
+    qInfo() << "FileAccept forwarded:"
+            << session->username() << "->" << to
+            << "fileId =" << fileId;
+}
+
+void TcpServer::handleFileReject(ClientSession *session,
+                                 const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        qWarning() << "Unauthenticated file reject";
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    QString to = json["to"].toString();
+    QString fileId = json["fileId"].toString();
+
+    ClientSession *targetSession =
+        m_onlineSessions.value(to, nullptr);
+
+    if (targetSession == nullptr) {
+        qInfo() << "FileReject target offline:" << to;
+        return;
+    }
+
+    QJsonObject forwardJson;
+    forwardJson["from"]   = session->username();
+    forwardJson["fileId"] = fileId;
+
+    QByteArray forwardBody =
+        QJsonDocument(forwardJson).toJson(QJsonDocument::Compact);
+
+    QByteArray forwardPacket =
+        PacketCodec::encode(MessageType::FileReject, forwardBody);
+
+    targetSession->socket()->write(forwardPacket);
+
+    qInfo() << "FileReject forwarded:"
+            << session->username() << "->" << to
+            << "fileId =" << fileId;
+}
+
+void TcpServer::handleFileChunk(ClientSession *session,
+                                const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    QString to = json["to"].toString();
+
+    ClientSession *target =
+        m_onlineSessions.value(to, nullptr);
+
+    if (target == nullptr) {
+        return;
+    }
+
+    QJsonObject forwardJson = json;
+    forwardJson["from"] = session->username();
+    forwardJson.remove("to");
+
+    QByteArray forwardBody =
+        QJsonDocument(forwardJson).toJson(QJsonDocument::Compact);
+
+    QByteArray forwardPacket =
+        PacketCodec::encode(MessageType::FileChunk, forwardBody);
+
+    target->socket()->write(forwardPacket);
+}
+
+void TcpServer::handleFileComplete(ClientSession *session,
+                                   const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        qWarning() << "Unauthenticated file complete";
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    QString to     = json["to"].toString();
+    QString fileId = json["fileId"].toString();
+    QString md5    = json["fileMd5"].toString();
+
+    ClientSession *target =
+        m_onlineSessions.value(to, nullptr);
+
+    if (target == nullptr) {
+        qInfo() << "FileComplete target offline:" << to;
+        return;
+    }
+
+    QJsonObject forwardJson;
+    forwardJson["from"]    = session->username();
+    forwardJson["fileId"]  = fileId;
+    forwardJson["fileMd5"] = md5;
+
+    QByteArray forwardBody =
+        QJsonDocument(forwardJson).toJson(QJsonDocument::Compact);
+
+    QByteArray forwardPacket =
+        PacketCodec::encode(MessageType::FileComplete,
+                            forwardBody);
+
+    target->socket()->write(forwardPacket);
+
+    qInfo() << "FileComplete forwarded:"
+            << session->username() << "->" << to
+            << "fileId =" << fileId
+            << "md5 =" << md5;
+}
+
+void TcpServer::handleFileCompleteAck(ClientSession *session,
+                                      const Packet &packet)
+{
+    if (!session->isAuthenticated()) {
+        qWarning() << "Unauthenticated file complete ack";
+        return;
+    }
+
+    QJsonDocument doc = QJsonDocument::fromJson(packet.body);
+    QJsonObject json = doc.object();
+
+    QString to     = json["to"].toString();
+    QString fileId = json["fileId"].toString();
+
+    ClientSession *target =
+        m_onlineSessions.value(to, nullptr);
+
+    if (target == nullptr) {
+        qInfo() << "FileCompleteAck target offline:" << to;
+        return;
+    }
+
+    QJsonObject forwardJson;
+    forwardJson["from"]   = session->username();
+    forwardJson["fileId"] = fileId;
+
+    QByteArray forwardBody =
+        QJsonDocument(forwardJson).toJson(QJsonDocument::Compact);
+
+    QByteArray forwardPacket =
+        PacketCodec::encode(MessageType::FileCompleteAck,
+                            forwardBody);
+
+    target->socket()->write(forwardPacket);
+
+    qInfo() << "FileCompleteAck forwarded:"
+            << session->username() << "->" << to
+            << "fileId =" << fileId;
+}
+

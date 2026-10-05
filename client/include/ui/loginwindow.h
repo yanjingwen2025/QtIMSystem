@@ -23,6 +23,7 @@ public:
 
 signals:
     void loginSucceeded();
+    void loginSucceededAs(const QString &username);
 
 private slots:
     void onLoginClicked();
@@ -39,6 +40,7 @@ private slots:
 private:
     Ui::LoginWindow *ui;
     TcpClient *m_client;
+    QString m_lastLoginUsername;
 };
 
 #endif // LOGINWINDOW_H

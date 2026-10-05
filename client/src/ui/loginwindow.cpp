@@ -47,6 +47,8 @@ LoginWindow::~LoginWindow()
 
 void LoginWindow::onLoginClicked()
 {
+
+
     QString username =
         ui->usernameEdit->text().trimmed();
 
@@ -58,9 +60,13 @@ void LoginWindow::onLoginClicked()
         return;
     }
 
+    m_lastLoginUsername = username;
+
     ui->statusLabel->setText("正在登录...");
 
     m_client->login(username, password);
+
+
 }
 
 void LoginWindow::onRegisterClicked()
@@ -88,6 +94,7 @@ void LoginWindow::onLoginResult(bool success,
         ui->statusLabel->setText("登录成功");
         m_client->requestFriendList();
         emit loginSucceeded();
+        emit loginSucceededAs(m_lastLoginUsername);
     } else {
         ui->statusLabel->setText(
             "登录失败：" + message
